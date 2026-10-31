@@ -28,6 +28,8 @@ The local Vite server does not execute the Vercel API function. Use `vercel dev`
 
 Import the repository into Vercel and add `DEEPSEEK_API_KEY` as a Secret environment variable for Production and Preview. The key must never use a `VITE_` or `NEXT_PUBLIC_` prefix.
 
+For Netlify, import the same repository. `netlify.toml` configures the build, SPA routing, and serverless generation endpoint. Add `DEEPSEEK_API_KEY` under Site configuration → Environment variables.
+
 ## Architecture decisions
 
 Generated code runs in Sandpack rather than the host page. Every successful generation stores a complete file snapshot so a user can restore a working version. Project state is browser-local to keep the no-sign-up experience fast and avoid collecting user data.
