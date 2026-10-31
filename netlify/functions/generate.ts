@@ -2,9 +2,11 @@ type ProjectFile = { code: string };
 type RequestBody = { prompt?: string; files?: Record<string, ProjectFile> };
 
 const SYSTEM_PROMPT = `You are Builder, an expert product engineer inside an AI app studio. Modify the supplied Sandpack React project to fulfill the user's request.
-Return ONLY valid JSON with this exact shape: {"summary":"short user-facing summary","files":{"/App.js":{"code":"complete file"},"/styles.css":{"code":"complete file"},"/package.json":{"code":"complete JSON string"}}}.
+Return ONLY valid JSON with this exact shape: {"summary":"short user-facing summary","edits":[{"file":"/App.js","search":"exact existing text","replace":"new text"}]}.
 Rules:
-- Return complete contents for every supplied file, including unchanged files.
+- Make small, targeted search-and-replace edits. Include only files that need changes.
+- Every search string must occur exactly once in its file. Preserve surrounding code.
+- You may use several edits; they are applied in order.
 - The app must run in Sandpack's React template without a backend.
 - Preserve existing working features unless the user asks to remove them.
 - Use JavaScript, not TypeScript. Import CSS as ./styles.css.
@@ -36,13 +38,13 @@ export const handler = async (event: { httpMethod: string; body?: string | null 
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
       body: JSON.stringify({
-        model: "deepseek-flash",
+        model: "deepseek-chat",
         messages: [
           { role: "system", content: SYSTEM_PROMPT },
           { role: "user", content: `Current project files:\n${serialized}\n\nUser request:\n${prompt}` },
         ],
         response_format: { type: "json_object" },
-        max_tokens: 7000,
+        max_tokens: 2500,
         temperature: 0.2,
       }),
     });
@@ -52,9 +54,18 @@ export const handler = async (event: { httpMethod: string; body?: string | null 
     }
     const payload = await upstream.json() as any;
     const parsed = JSON.parse(payload.choices?.[0]?.message?.content ?? "{}");
-    if (!parsed.files || !parsed.summary) throw new Error("Invalid model output");
-    return reply(200, { files: parsed.files, summary: parsed.summary, mode: "ai" });
-  } catch {
+    if (!Array.isArray(parsed.edits) || !parsed.summary) throw new Error("Invalid model output");
+    const nextFiles = JSON.parse(JSON.stringify(files)) as Record<string, ProjectFile>;
+    for (const edit of parsed.edits) {
+      const target = nextFiles[edit.file];
+      if (!target || typeof edit.search !== "string" || typeof edit.replace !== "string") throw new Error("Invalid edit");
+      const first = target.code.indexOf(edit.search);
+      if (first < 0 || first !== target.code.lastIndexOf(edit.search)) throw new Error("Ambiguous edit");
+      target.code = target.code.slice(0, first) + edit.replace + target.code.slice(first + edit.search.length);
+    }
+    return reply(200, { files: nextFiles, summary: parsed.summary, mode: "ai" });
+  } catch (error) {
+    console.error("Generation failed", error);
     return reply(500, { error: "Generation failed" });
   }
 };
