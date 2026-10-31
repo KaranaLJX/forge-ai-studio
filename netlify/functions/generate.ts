@@ -46,7 +46,10 @@ export const handler = async (event: { httpMethod: string; body?: string | null 
         temperature: 0.2,
       }),
     });
-    if (!upstream.ok) return reply(502, { error: "Model request failed" });
+    if (!upstream.ok) {
+      console.error("DeepSeek request failed", { status: upstream.status });
+      return reply(502, { error: "Model request failed", providerStatus: upstream.status });
+    }
     const payload = await upstream.json() as any;
     const parsed = JSON.parse(payload.choices?.[0]?.message?.content ?? "{}");
     if (!parsed.files || !parsed.summary) throw new Error("Invalid model output");
