@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { SandpackCodeEditor, SandpackLayout, SandpackPreview, SandpackProvider } from "@codesandbox/sandpack-react";
 import { ArrowUp, Check, ChevronDown, Code2, Eye, History, Loader2, Plus, RotateCcw, Sparkles, WandSparkles, X } from "lucide-react";
-import type { Message, ProjectFiles, StoredProject, Version } from "./types";
+import type { Message, ProjectFiles, ProjectRecord, StoredProject, Version, Workspace } from "./types";
 import { starterFiles } from "./starter";
 
 const STORAGE_KEY = "forge-studio-project-v1";
+const WORKSPACE_KEY = "forge-studio-workspace-v1";
 const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
 const cloneFiles = (files: ProjectFiles): ProjectFiles => JSON.parse(JSON.stringify(files));
 const welcome: Message = { id: "welcome", role: "assistant", agent: "lead", content: "Hi, I’m Nova, your build lead. Describe the app you want and I’ll coordinate the plan, code, and preview.", createdAt: Date.now() };
@@ -21,25 +22,41 @@ export default function App() {
   const [tab, setTab] = useState<"preview" | "code">("preview");
   const [historyOpen, setHistoryOpen] = useState(false);
   const [saved, setSaved] = useState(true);
+  const [projects, setProjects] = useState<ProjectRecord[]>([]);
+  const [activeProjectId, setActiveProjectId] = useState("");
+  const [hydrated, setHydrated] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return;
     try {
-      const stored: StoredProject = JSON.parse(raw);
-      setFiles(stored.files); setMessages(stored.messages); setVersions(stored.versions);
-    } catch { localStorage.removeItem(STORAGE_KEY); }
+      const workspaceRaw = localStorage.getItem(WORKSPACE_KEY);
+      if (workspaceRaw) {
+        const workspace: Workspace = JSON.parse(workspaceRaw);
+        const active = workspace.projects.find(project => project.id === workspace.activeProjectId) || workspace.projects[0];
+        if (active) { setProjects(workspace.projects); setActiveProjectId(active.id); setFiles(active.files); setMessages(active.messages); setVersions(active.versions); }
+      } else {
+        const legacyRaw = localStorage.getItem(STORAGE_KEY);
+        const legacy: StoredProject | null = legacyRaw ? JSON.parse(legacyRaw) : null;
+        const project: ProjectRecord = { id: uid(), name: legacy?.messages.find(message => message.role === "user")?.content.slice(0, 28) || "My first app", files: legacy?.files || cloneFiles(starterFiles), messages: legacy?.messages || [welcome], versions: legacy?.versions || [], updatedAt: Date.now() };
+        setProjects([project]); setActiveProjectId(project.id); setFiles(project.files); setMessages(project.messages); setVersions(project.versions);
+      }
+    } catch { localStorage.removeItem(WORKSPACE_KEY); }
+    setHydrated(true);
   }, []);
 
   useEffect(() => {
+    if (!hydrated || !activeProjectId) return;
     setSaved(false);
     const timer = window.setTimeout(() => {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ files, messages, versions, updatedAt: Date.now() }));
+      setProjects(current => {
+        const next = current.map(project => project.id === activeProjectId ? { ...project, files, messages, versions, updatedAt: Date.now() } : project);
+        localStorage.setItem(WORKSPACE_KEY, JSON.stringify({ activeProjectId, projects: next } satisfies Workspace));
+        return next;
+      });
       setSaved(true);
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [files, messages, versions]);
+  }, [files, messages, versions, activeProjectId, hydrated]);
 
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" }); }, [messages, stage]);
 
@@ -48,6 +65,7 @@ export default function App() {
   async function generate(text: string) {
     if (!text.trim() || building) return;
     const clean = text.trim();
+    setProjects(current => current.map(project => project.id === activeProjectId && (project.name === "Untitled app" || project.name === "My first app") ? { ...project, name: clean.slice(0, 28) } : project));
     setPrompt(""); setBuilding(true); setStage(1);
     setMessages(prev => [...prev, { id: uid(), role: "user", content: clean, createdAt: Date.now() }]);
     await new Promise(r => setTimeout(r, 650)); setStage(2);
@@ -75,15 +93,26 @@ export default function App() {
     setMessages(prev => [...prev, { id: uid(), role: "assistant", agent: "builder", content: newVersion.summary, createdAt: Date.now() }]);
   }
 
-  function reset() {
-    setFiles(cloneFiles(starterFiles)); setMessages([welcome]); setVersions([]); localStorage.removeItem(STORAGE_KEY);
+  function createProject() {
+    const project: ProjectRecord = { id: uid(), name: "Untitled app", files: cloneFiles(starterFiles), messages: [{ ...welcome, id: uid(), createdAt: Date.now() }], versions: [], updatedAt: Date.now() };
+    const next = [...projects.map(item => item.id === activeProjectId ? { ...item, files, messages, versions, updatedAt: Date.now() } : item), project];
+    setProjects(next); setActiveProjectId(project.id); setFiles(project.files); setMessages(project.messages); setVersions([]);
+    localStorage.setItem(WORKSPACE_KEY, JSON.stringify({ activeProjectId: project.id, projects: next } satisfies Workspace));
+  }
+
+  function switchProject(id: string) {
+    const target = projects.find(project => project.id === id);
+    if (!target || id === activeProjectId) return;
+    const next = projects.map(project => project.id === activeProjectId ? { ...project, files, messages, versions, updatedAt: Date.now() } : project);
+    setProjects(next); setActiveProjectId(target.id); setFiles(cloneFiles(target.files)); setMessages(target.messages); setVersions(target.versions);
+    localStorage.setItem(WORKSPACE_KEY, JSON.stringify({ activeProjectId: target.id, projects: next } satisfies Workspace));
   }
 
   return <div className="shell">
     <header className="topbar">
       <div className="brand"><div className="brandMark"><Sparkles size={17}/></div><span>FORGE</span><b>Studio</b></div>
-      <div className="projectTitle"><span className="statusDot"/>Travel planner <ChevronDown size={14}/></div>
-      <div className="topActions"><span className="saveState"><Check size={13}/>{saved ? "Saved" : "Saving"}</span><button className="ghost" onClick={() => setHistoryOpen(true)}><History size={15}/>{versionLabel}</button><button className="iconButton" title="New project" onClick={reset}><Plus size={17}/></button></div>
+      <label className="projectTitle"><span className="statusDot"/><select aria-label="Switch project" value={activeProjectId} onChange={event => switchProject(event.target.value)}>{projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select><ChevronDown size={14}/></label>
+      <div className="topActions"><span className="saveState"><Check size={13}/>{saved ? "Saved" : "Saving"}</span><button className="ghost" onClick={() => setHistoryOpen(true)}><History size={15}/>{versionLabel}</button><button className="iconButton" title="New project" onClick={createProject}><Plus size={17}/></button></div>
     </header>
     <div className="workspace">
       <aside className="chatPane">

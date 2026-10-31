@@ -23,3 +23,6 @@ export type StoredProject = {
   versions: Version[];
   updatedAt: number;
 };
+
+export type ProjectRecord = StoredProject & { id: string; name: string };
+export type Workspace = { activeProjectId: string; projects: ProjectRecord[] };
