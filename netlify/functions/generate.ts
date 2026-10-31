@@ -6,7 +6,9 @@ Return ONLY valid JSON with this exact shape: {"summary":"short user-facing summ
 Rules:
 - Make small, targeted search-and-replace edits. Include only files that need changes.
 - Every search string must occur exactly once in its file. Preserve surrounding code.
+- When rebuilding most of a file, set search to the exact sentinel __REPLACE_ALL__ and put the complete new file in replace. Never copy the old full file into search.
 - You may use several edits; they are applied in order.
+- Keep a full rebuild concise: App.js under 140 lines and styles.css under 180 lines.
 - The app must run in Sandpack's React template without a backend.
 - Preserve existing working features unless the user asks to remove them.
 - Use JavaScript, not TypeScript. Import CSS as ./styles.css.
@@ -44,7 +46,7 @@ export const handler = async (event: { httpMethod: string; body?: string | null 
           { role: "user", content: `Current project files:\n${serialized}\n\nUser request:\n${prompt}` },
         ],
         response_format: { type: "json_object" },
-        max_tokens: 2500,
+        max_tokens: 4200,
         temperature: 0.2,
       }),
     });
@@ -59,6 +61,10 @@ export const handler = async (event: { httpMethod: string; body?: string | null 
     for (const edit of parsed.edits) {
       const target = nextFiles[edit.file];
       if (!target || typeof edit.search !== "string" || typeof edit.replace !== "string") throw new Error("Invalid edit");
+      if (edit.search === "__REPLACE_ALL__") {
+        target.code = edit.replace;
+        continue;
+      }
       const first = target.code.indexOf(edit.search);
       if (first < 0 || first !== target.code.lastIndexOf(edit.search)) throw new Error("Ambiguous edit");
       target.code = target.code.slice(0, first) + edit.replace + target.code.slice(first + edit.search.length);

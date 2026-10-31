@@ -3,7 +3,6 @@ import { SandpackCodeEditor, SandpackLayout, SandpackPreview, SandpackProvider }
 import { ArrowUp, Check, ChevronDown, Code2, Eye, History, Loader2, Plus, RotateCcw, Sparkles, WandSparkles, X } from "lucide-react";
 import type { Message, ProjectFiles, StoredProject, Version } from "./types";
 import { starterFiles } from "./starter";
-import { localGenerate } from "./localGenerator";
 
 const STORAGE_KEY = "forge-studio-project-v1";
 const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -56,14 +55,16 @@ export default function App() {
     let result: { files: ProjectFiles; summary: string; mode?: string };
     try {
       const response = await fetch("/api/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: clean, files }) });
-      if (!response.ok) throw new Error("API unavailable");
+      if (!response.ok) throw new Error("AI generation failed");
       result = await response.json();
     } catch {
-      result = localGenerate(clean, files);
+      setMessages(prev => [...prev, { id: uid(), role: "assistant", agent: "builder", content: "AI generation failed this time. Your current app is unchanged—please retry the request.", createdAt: Date.now() }]);
+      setStage(0); setBuilding(false);
+      return;
     }
     const nextVersion: Version = { id: uid(), number: versions.length + 1, prompt: clean, summary: result.summary, files: cloneFiles(result.files), createdAt: Date.now() };
     setFiles(result.files); setVersions(prev => [...prev, nextVersion]);
-    setMessages(prev => [...prev, { id: uid(), role: "assistant", agent: "builder", content: `${result.summary}${result.mode === "demo" ? " Running in local demo mode." : ""}`, createdAt: Date.now() }]);
+    setMessages(prev => [...prev, { id: uid(), role: "assistant", agent: "builder", content: result.summary, createdAt: Date.now() }]);
     setStage(0); setBuilding(false);
   }
 
