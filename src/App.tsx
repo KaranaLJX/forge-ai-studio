@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SandpackCodeEditor, SandpackLayout, SandpackPreview, SandpackProvider, useSandpack } from "@codesandbox/sandpack-react";
-import { ArrowRight, ArrowUp, Check, ChevronDown, Code2, Download, Eye, History, LayoutGrid, Loader2, Pencil, Plus, RotateCcw, Sparkles, Trash2, WandSparkles, X } from "lucide-react";
+import { ArrowRight, ArrowUp, Check, ChevronDown, Code2, Download, Eye, History, LayoutGrid, Loader2, Pencil, Plus, RotateCcw, Sparkles, Square, Trash2, WandSparkles, X } from "lucide-react";
 import type { Message, ProjectFiles, ProjectRecord, StoredProject, Version, Workspace } from "./types";
 import { blankFiles, starterFiles } from "./starter";
 
@@ -60,7 +60,9 @@ export default function App() {
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [screen, setScreen] = useState<"dashboard" | "studio">("dashboard");
   const [initialBuildMode, setInitialBuildMode] = useState(false);
+  const [lastFailedPrompt, setLastFailedPrompt] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
+  const generationController = useRef<AbortController | null>(null);
 
   useEffect(() => {
     try {
@@ -101,13 +103,16 @@ export default function App() {
     if (!text.trim() || building) return;
     const clean = text.trim();
     const initialBuild = versions.length === 0 && !/^(开始(?:构建)?吧?|继续吧?|好的?|可以|行)$/i.test(clean);
+    const controller = new AbortController();
+    generationController.current = controller;
     setInitialBuildMode(initialBuild);
+    setLastFailedPrompt("");
     setProjects(current => current.map(project => project.id === activeProjectId && (project.name === "Untitled app" || project.name === "My first app") ? { ...project, name: clean.slice(0, 28) } : project));
     setPrompt(""); setBuilding(true); setStage(1);
     setMessages(prev => [...prev, { id: uid(), role: "user", content: clean, createdAt: Date.now() }]);
     let result: { files: ProjectFiles; summary: string; mode?: string; changed?: boolean; changedFiles?: string[] };
     try {
-      const call = (payload: object) => fetch("/api/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      const call = (payload: object) => fetch("/api/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), signal: controller.signal });
       const runStep = async (stepFiles: ProjectFiles, targetFile?: string) => {
         let response = await call({ prompt: clean, files: stepFiles, targetFile });
         if (response.status === 422) {
@@ -133,20 +138,29 @@ export default function App() {
         setStage(4);
       }
     } catch (error) {
+      const cancelled = error instanceof DOMException && error.name === "AbortError";
       const detail = error instanceof Error ? error.message : "Unknown error";
-      setMessages(prev => [...prev, { id: uid(), role: "assistant", agent: "builder", content: `Generation stopped safely: ${detail}. Your current app is unchanged—please retry.`, createdAt: Date.now() }]);
+      setMessages(prev => [...prev, { id: uid(), role: "assistant", agent: "builder", content: cancelled ? "Generation cancelled. Your current app is unchanged." : `Generation stopped safely: ${detail}. Your current app is unchanged—please retry.`, createdAt: Date.now() }]);
+      if (!cancelled) setLastFailedPrompt(clean);
+      generationController.current = null;
       setStage(0); setBuilding(false);
       return;
     }
     if (result.changed === false) {
       setMessages(prev => [...prev, { id: uid(), role: "assistant", agent: "builder", content: result.summary, createdAt: Date.now() }]);
+      generationController.current = null;
       setStage(0); setBuilding(false);
       return;
     }
     const nextVersion: Version = { id: uid(), number: versions.length + 1, prompt: clean, summary: result.summary, files: cloneFiles(result.files), createdAt: Date.now(), changedFiles: result.changedFiles };
     setFiles(result.files); setVersions(prev => [...prev, nextVersion]); setCodeDirty(false); setRuntimeError(null);
     setMessages(prev => [...prev, { id: uid(), role: "assistant", agent: "builder", content: result.summary, createdAt: Date.now() }]);
+    generationController.current = null;
     setStage(0); setBuilding(false);
+  }
+
+  function cancelGeneration() {
+    generationController.current?.abort();
   }
 
   function restore(version: Version) {
@@ -227,8 +241,9 @@ export default function App() {
           </div>}
         </div>
         <div className="composerWrap">
+          {!building && lastFailedPrompt && <div className="retryBar"><span>The last generation failed.</span><button onClick={() => generate(lastFailedPrompt)}><RotateCcw size={12}/>Retry</button></div>}
           {!building && messages.length < 4 && <div className="suggestions">{examples.slice(0,2).map(x => <button key={x} onClick={() => generate(x)}>{x}<span>↗</span></button>)}</div>}
-          <form className="composer" onSubmit={e => { e.preventDefault(); generate(prompt); }}><textarea value={prompt} onChange={e => setPrompt(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); generate(prompt); } }} placeholder="Describe a change or build something new…" rows={2}/><div className="composerBottom"><span><WandSparkles size={14}/> Agent mode</span><button disabled={!prompt.trim() || building}><ArrowUp size={17}/></button></div></form><p className="hint">Enter to send · Shift + Enter for a new line</p>
+          <form className="composer" onSubmit={e => { e.preventDefault(); generate(prompt); }}><textarea value={prompt} onChange={e => setPrompt(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); generate(prompt); } }} placeholder="Describe a change or build something new…" rows={2} disabled={building}/><div className="composerBottom"><span><WandSparkles size={14}/> Agent mode</span>{building ? <button type="button" className="stopButton" title="Stop generation" onClick={cancelGeneration}><Square size={12}/></button> : <button disabled={!prompt.trim()}><ArrowUp size={17}/></button>}</div></form><p className="hint">{building ? "You can stop safely without changing the current app" : "Enter to send · Shift + Enter for a new line"}</p>
         </div>
       </aside>
       <main className="canvasPane">
