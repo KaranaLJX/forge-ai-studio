@@ -49,3 +49,9 @@ export const starterFiles: ProjectFiles = {
   "/styles.css": { code: styleCode },
   "/package.json": { code: JSON.stringify({ scripts: { start: "react-scripts start" }, dependencies: { "@vitejs/plugin-react": "latest", vite: "latest", react: "latest", "react-dom": "latest", "react-scripts": "latest" }, devDependencies: {} }, null, 2) },
 };
+
+export const blankFiles: ProjectFiles = {
+  "/App.js": { code: `import "./styles.css";\n\nexport default function App() {\n  return <main className="blank"><span>NEW PROJECT</span><h1>What will you build?</h1><p>Describe your idea in the project chat and Forge will create it here.</p></main>;\n}` },
+  "/styles.css": { code: `*{box-sizing:border-box}body{margin:0;background:#f5f6f2;color:#20231f;font-family:Inter,system-ui,sans-serif}.blank{min-height:100vh;display:grid;place-content:center;text-align:center;padding:32px}.blank span{font-size:11px;letter-spacing:2px;color:#788071}.blank h1{font-size:clamp(36px,7vw,72px);letter-spacing:-3px;margin:12px 0}.blank p{color:#777d74;margin:0}` },
+  "/package.json": starterFiles["/package.json"],
+};

@@ -90,7 +90,7 @@ export const handler = async (event: { httpMethod: string; body?: string | null 
       const detail = validationError instanceof Error ? validationError.message : "Unknown validation error";
       return reply(422, { error: "Generated code did not compile", detail, files: nextFiles });
     }
-    return reply(200, { files: nextFiles, summary: generated.summary, mode: "ai", changed: generated.operations.length > 0 });
+    return reply(200, { files: nextFiles, summary: generated.summary, mode: "ai", changed: generated.operations.length > 0, changedFiles: [...new Set(generated.operations.map(operation => operation.file))] });
   } catch (error) {
     console.error("Generation failed", error);
     return reply(500, { error: "Generation failed", detail: error instanceof Error ? error.message : "Unknown error" });

@@ -15,6 +15,7 @@ export type Version = {
   summary: string;
   files: ProjectFiles;
   createdAt: number;
+  changedFiles?: string[];
 };
 
 export type StoredProject = {
