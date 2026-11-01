@@ -136,7 +136,7 @@ export default function App() {
   }
 
   function saveCodeVersion() {
-    const nextVersion: Version = { id: uid(), number: versions.length + 1, prompt: "Manual code edit", summary: "Saved manual changes from the code editor.", files: cloneFiles(files), createdAt: Date.now() };
+    const nextVersion: Version = { id: uid(), number: versions.length + 1, prompt: "Manual code edit", summary: "Saved manual changes from the code editor.", files: cloneFiles(files), createdAt: Date.now(), changedFiles: Object.keys(files) };
     setVersions(prev => [...prev, nextVersion]); setCodeDirty(false);
     setMessages(prev => [...prev, { id: uid(), role: "assistant", agent: "builder", content: "Saved the code editor changes as a new version.", createdAt: Date.now() }]);
   }
@@ -171,6 +171,9 @@ export default function App() {
     localStorage.setItem(WORKSPACE_KEY, JSON.stringify({ activeProjectId: next.id, projects: remaining } satisfies Workspace));
   }
 
+  const handleSandpackFiles = useCallback((next: ProjectFiles) => { setFiles(next); setCodeDirty(true); }, []);
+  const handleSandpackError = useCallback((error: string | null) => setRuntimeError(error), []);
+
   return <div className="shell">
     <header className="topbar">
       <div className="brand"><div className="brandMark"><Sparkles size={17}/></div><span>FORGE</span><b>Studio</b></div>
@@ -200,7 +203,7 @@ export default function App() {
         <div className="canvasToolbar"><div className="viewTabs"><button className={tab === "preview" ? "selected" : ""} onClick={() => setTab("preview")}><Eye size={15}/>Preview</button><button className={tab === "code" ? "selected" : ""} onClick={() => setTab("code")}><Code2 size={15}/>Code</button></div><div className="canvasStatus">{codeDirty && <button className="saveCode" onClick={saveCodeVersion}><Check size={13}/>Save code version</button>}<div className="deviceLabel"><span/> Live preview</div></div></div>
         <div className="previewStage">
           <SandpackProvider template="react" files={files} theme="light" options={{ activeFile: "/App.js", recompileMode: "delayed", recompileDelay: 400 }}>
-            <SandpackWorkspace tab={tab} onFilesChange={useCallback((next: ProjectFiles) => { setFiles(next); setCodeDirty(true); }, [])} onError={useCallback((error: string | null) => setRuntimeError(error), [])}/>
+            <SandpackWorkspace tab={tab} onFilesChange={handleSandpackFiles} onError={handleSandpackError}/>
           </SandpackProvider>
           {runtimeError && <div className="runtimeError"><div><b>Preview error</b><span>{runtimeError}</span></div><button onClick={() => generate(`Fix this preview error: ${runtimeError}`)}>Ask AI to fix</button></div>}
         </div>
