@@ -70,13 +70,36 @@ export default function App() {
     setMessages(prev => [...prev, { id: uid(), role: "user", content: clean, createdAt: Date.now() }]);
     await new Promise(r => setTimeout(r, 650)); setStage(2);
     await new Promise(r => setTimeout(r, 750)); setStage(3);
-    let result: { files: ProjectFiles; summary: string; mode?: string };
+    let result: { files: ProjectFiles; summary: string; mode?: string; changed?: boolean };
     try {
-      const response = await fetch("/api/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: clean, files }) });
-      if (!response.ok) throw new Error("AI generation failed");
-      result = await response.json();
-    } catch {
-      setMessages(prev => [...prev, { id: uid(), role: "assistant", agent: "builder", content: "AI generation failed this time. Your current app is unchanged—please retry the request.", createdAt: Date.now() }]);
+      const call = (payload: object) => fetch("/api/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      const runStep = async (stepFiles: ProjectFiles, targetFile?: string) => {
+        let response = await call({ prompt: clean, files: stepFiles, targetFile });
+        if (response.status === 422) {
+          const invalid = await response.json();
+          response = await call({ prompt: clean, files: invalid.files, repairError: invalid.detail, targetFile });
+        }
+        if (!response.ok) {
+          const failure = await response.json().catch(() => ({}));
+          throw new Error(failure.detail || "AI generation failed");
+        }
+        return response.json();
+      };
+      if (versions.length === 0 && !/^(开始(?:构建)?吧?|继续吧?|好的?|可以|行)$/i.test(clean)) {
+        const appStep = await runStep(files, "/App.js");
+        const styleStep = await runStep(appStep.files, "/styles.css");
+        result = { ...styleStep, summary: appStep.summary };
+      } else {
+        result = await runStep(files);
+      }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Unknown error";
+      setMessages(prev => [...prev, { id: uid(), role: "assistant", agent: "builder", content: `Generation stopped safely: ${detail}. Your current app is unchanged—please retry.`, createdAt: Date.now() }]);
+      setStage(0); setBuilding(false);
+      return;
+    }
+    if (result.changed === false) {
+      setMessages(prev => [...prev, { id: uid(), role: "assistant", agent: "builder", content: result.summary, createdAt: Date.now() }]);
       setStage(0); setBuilding(false);
       return;
     }

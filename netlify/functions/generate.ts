@@ -1,26 +1,69 @@
+import { parse } from "@babel/parser";
+
 type ProjectFile = { code: string };
-type RequestBody = { prompt?: string; files?: Record<string, ProjectFile> };
+type RequestBody = { prompt?: string; files?: Record<string, ProjectFile>; repairError?: string; targetFile?: string };
+type Operation = { type: "write_file" | "replace_text"; file: string; content: string; search?: string };
 
-const SYSTEM_PROMPT = `You are Builder, an expert product engineer inside an AI app studio. Modify the supplied Sandpack React project to fulfill the user's request.
-Return ONLY valid JSON with this exact shape: {"summary":"short user-facing summary","edits":[{"file":"/App.js","search":"exact existing text","replace":"new text"}]}.
+const SYSTEM_PROMPT = `You are Builder, an expert product engineer operating a browser-based React code workspace.
+Return ONLY valid JSON: {"summary":"short user-facing summary","operations":[{"type":"write_file","file":"/App.js","content":"complete code"},{"type":"replace_text","file":"/styles.css","search":"exact unique text","content":"replacement"}]}.
 Rules:
-- Make small, targeted search-and-replace edits. Include only files that need changes.
-- Every search string must occur exactly once in its file. Preserve surrounding code.
-- When rebuilding most of a file, set search to the exact sentinel __REPLACE_ALL__ and put the complete new file in replace. Never copy the old full file into search.
-- You may use several edits; they are applied in order.
-- Keep a full rebuild concise: App.js under 140 lines and styles.css under 180 lines.
-- The app must run in Sandpack's React template without a backend.
-- Preserve existing working features unless the user asks to remove them.
-- Use JavaScript, not TypeScript. Import CSS as ./styles.css.
-- Keep dependencies minimal. Browser localStorage is allowed.
-- Make the result polished, responsive, and genuinely interactive.
-- Never use markdown fences or explanatory text outside the JSON.`;
+- Use write_file only for a new file or a substantial rebuild. Use replace_text for normal changes.
+- Include only files that change. Never repeat unchanged files or old source in content.
+- Each replace_text search must occur exactly once. Operations run in order.
+- The project runs in Sandpack's React template. Use JavaScript + JSX, not TypeScript. Import ./styles.css.
+- Preserve working features unless removal is requested. Keep dependencies minimal and never add a backend.
+- For a full build keep App.js under 130 lines and styles.css under 160 lines. Prefer compact data-driven components.
+- Make the result polished, responsive, accessible, and interactive. localStorage is allowed.
+- Never use markdown fences or text outside the JSON.`;
 
-const reply = (statusCode: number, body: unknown) => ({
-  statusCode,
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify(body),
-});
+const reply = (statusCode: number, body: unknown) => ({ statusCode, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+function applyOperations(files: Record<string, ProjectFile>, operations: Operation[]) {
+  const next = JSON.parse(JSON.stringify(files)) as Record<string, ProjectFile>;
+  for (const operation of operations) {
+    if (!operation || typeof operation.file !== "string" || typeof operation.content !== "string") throw new Error("Invalid file operation");
+    if (operation.type === "write_file") { next[operation.file] = { code: operation.content }; continue; }
+    if (operation.type !== "replace_text" || typeof operation.search !== "string" || !next[operation.file]) throw new Error("Invalid replace operation");
+    const source = next[operation.file].code;
+    const first = source.indexOf(operation.search);
+    if (first < 0 || first !== source.lastIndexOf(operation.search)) throw new Error(`Search text is missing or ambiguous in ${operation.file}`);
+    next[operation.file].code = source.slice(0, first) + operation.content + source.slice(first + operation.search.length);
+  }
+  return next;
+}
+
+function validateProject(files: Record<string, ProjectFile>) {
+  const app = files["/App.js"]?.code;
+  if (!app) throw new Error("App.js is missing");
+  parse(app, { sourceType: "module", plugins: ["jsx"] });
+  const packageCode = files["/package.json"]?.code;
+  if (packageCode) JSON.parse(packageCode);
+}
+
+async function requestOperations(apiKey: string, prompt: string, files: Record<string, ProjectFile>, repairError?: string, targetFile?: string) {
+  const context = JSON.stringify(files);
+  const scope = targetFile ? `\nYou may modify ONLY ${targetFile}. Return exactly one operation for that file. Keep it concise.` : "";
+  const task = repairError
+    ? `Repair the project after this validation error: ${repairError}\nMake the smallest reliable correction.${scope}\n\nProject files:\n${context}`
+    : `Project files:\n${context}\n\nUser request:\n${prompt}${scope}`;
+  const upstream = await fetch("https://api.deepseek.com/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model: "deepseek-chat",
+      messages: [{ role: "system", content: SYSTEM_PROMPT }, { role: "user", content: task }],
+      response_format: { type: "json_object" },
+      max_tokens: repairError ? 2200 : targetFile === "/styles.css" ? 2800 : targetFile ? 3400 : 4400,
+      temperature: 0.15,
+    }),
+  });
+  if (!upstream.ok) throw new Error(`Model request failed (${upstream.status})`);
+  const payload = await upstream.json() as any;
+  if (payload.choices?.[0]?.finish_reason === "length") throw new Error("Model output was truncated");
+  const parsed = JSON.parse(payload.choices?.[0]?.message?.content ?? "{}");
+  if (!Array.isArray(parsed.operations) || typeof parsed.summary !== "string") throw new Error("Invalid model response");
+  return parsed as { summary: string; operations: Operation[] };
+}
 
 export const handler = async (event: { httpMethod: string; body?: string | null }) => {
   if (event.httpMethod !== "POST") return reply(405, { error: "Method not allowed" });
@@ -32,46 +75,24 @@ export const handler = async (event: { httpMethod: string; body?: string | null 
   const prompt = body.prompt?.trim();
   const files = body.files;
   if (!prompt || prompt.length > 1500 || !files) return reply(400, { error: "Invalid request" });
-  const serialized = JSON.stringify(files);
-  if (serialized.length > 90000) return reply(413, { error: "Project is too large" });
+  if (JSON.stringify(files).length > 90000) return reply(413, { error: "Project is too large" });
+
+  if (!body.repairError && /^(开始(?:构建)?吧?|继续吧?|好的?|可以|行|go ahead|build it|continue)[。.!！ ]*$/i.test(prompt)) {
+    return reply(200, { files, summary: "当前应用已经构建完成。请直接告诉我下一处需要修改的内容。", mode: "ai", changed: false });
+  }
 
   try {
-    const upstream = await fetch("https://api.deepseek.com/chat/completions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({
-        model: "deepseek-chat",
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: `Current project files:\n${serialized}\n\nUser request:\n${prompt}` },
-        ],
-        response_format: { type: "json_object" },
-        max_tokens: 4200,
-        temperature: 0.2,
-      }),
-    });
-    if (!upstream.ok) {
-      console.error("DeepSeek request failed", { status: upstream.status });
-      return reply(502, { error: "Model request failed", providerStatus: upstream.status });
+    const generated = await requestOperations(apiKey, prompt, files, body.repairError, body.targetFile);
+    if (body.targetFile && generated.operations.some(operation => operation.file !== body.targetFile)) throw new Error("Model changed a file outside the requested scope");
+    const nextFiles = applyOperations(files, generated.operations);
+    try { validateProject(nextFiles); }
+    catch (validationError) {
+      const detail = validationError instanceof Error ? validationError.message : "Unknown validation error";
+      return reply(422, { error: "Generated code did not compile", detail, files: nextFiles });
     }
-    const payload = await upstream.json() as any;
-    const parsed = JSON.parse(payload.choices?.[0]?.message?.content ?? "{}");
-    if (!Array.isArray(parsed.edits) || !parsed.summary) throw new Error("Invalid model output");
-    const nextFiles = JSON.parse(JSON.stringify(files)) as Record<string, ProjectFile>;
-    for (const edit of parsed.edits) {
-      const target = nextFiles[edit.file];
-      if (!target || typeof edit.search !== "string" || typeof edit.replace !== "string") throw new Error("Invalid edit");
-      if (edit.search === "__REPLACE_ALL__") {
-        target.code = edit.replace;
-        continue;
-      }
-      const first = target.code.indexOf(edit.search);
-      if (first < 0 || first !== target.code.lastIndexOf(edit.search)) throw new Error("Ambiguous edit");
-      target.code = target.code.slice(0, first) + edit.replace + target.code.slice(first + edit.search.length);
-    }
-    return reply(200, { files: nextFiles, summary: parsed.summary, mode: "ai" });
+    return reply(200, { files: nextFiles, summary: generated.summary, mode: "ai", changed: generated.operations.length > 0 });
   } catch (error) {
     console.error("Generation failed", error);
-    return reply(500, { error: "Generation failed" });
+    return reply(500, { error: "Generation failed", detail: error instanceof Error ? error.message : "Unknown error" });
   }
 };
