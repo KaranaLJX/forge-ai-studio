@@ -160,9 +160,8 @@ export default function App() {
         <div className="canvasToolbar"><div className="viewTabs"><button className={tab === "preview" ? "selected" : ""} onClick={() => setTab("preview")}><Eye size={15}/>Preview</button><button className={tab === "code" ? "selected" : ""} onClick={() => setTab("code")}><Code2 size={15}/>Code</button></div><div className="deviceLabel"><span/> Live preview</div></div>
         <div className="previewStage">
           <SandpackProvider template="react" files={files} theme="light" options={{ activeFile: "/App.js", recompileMode: "delayed", recompileDelay: 400 }}>
-            <SandpackLayout className="sandpackFrame">
-              {tab === "preview" ? <SandpackPreview showOpenInCodeSandbox={false} showRefreshButton /> : <SandpackCodeEditor showTabs closableTabs showLineNumbers wrapContent />}
-            </SandpackLayout>
+            <div className={tab === "preview" ? "sandpackView active" : "sandpackView"}><SandpackLayout className="sandpackFrame"><SandpackPreview showOpenInCodeSandbox={false} showRefreshButton /></SandpackLayout></div>
+            <div className={tab === "code" ? "sandpackView active" : "sandpackView"}><SandpackLayout className="sandpackFrame"><SandpackCodeEditor showTabs closableTabs showLineNumbers wrapContent /></SandpackLayout></div>
           </SandpackProvider>
         </div>
       </main>
